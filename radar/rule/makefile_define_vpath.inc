@@ -1,4 +1,0 @@
-VPATH += \
-	include \
-	lib \
-	source \
