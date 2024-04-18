@@ -7,6 +7,15 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+//csv and socket
+#include <time.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <sys/time.h>
+
 #include "acc_definitions_common.h"
 #include "acc_detector_presence.h"
 #include "acc_hal_definitions.h"
@@ -36,11 +45,15 @@
 #define DEFAULT_DETECTION_THRESHOLD (2.0f)
 #define DEFAULT_NBR_REMOVED_PC (1)
 #define DEFAULT_PROFILE (1)
+#define DEFAULT_RECEIVER_GAIN (0.5) //default 0.7
 #define DEFAULT_HWAAS (15) // Hardware accelerated average samples bigger numbers reduce SNR default is 10
 
 static void update_configuration(acc_detector_presence_configuration_t presence_configuration);
 
 static void print_result(acc_detector_presence_result_t result);
+
+void trigger_camera();
+
 
 int main(int argc, char *argv[]);
 
@@ -88,7 +101,7 @@ int main(int argc, char *argv[])
     }
 
     bool success = true;
-    const int iterations = 1000;
+    const int iterations = 10000;
     acc_detector_presence_result_t result;
 
     for (int i = 0; i < iterations; i++)
@@ -101,8 +114,7 @@ int main(int argc, char *argv[])
         }
 
         print_result(result);
-        printf("bug");
-
+        
         acc_integration_sleep_ms(1000 / DEFAULT_UPDATE_RATE);
     }
 
@@ -130,19 +142,81 @@ void update_configuration(acc_detector_presence_configuration_t presence_configu
     acc_detector_presence_configuration_length_set(presence_configuration, DEFAULT_LENGTH_M);
     acc_detector_presence_configuration_power_save_mode_set(presence_configuration, DEFAULT_POWER_SAVE_MODE);
     acc_detector_presence_configuration_nbr_removed_pc_set(presence_configuration, DEFAULT_NBR_REMOVED_PC);
+    acc_detector_presence_configuration_receiver_gain_set(presence_configuration, DEFAULT_RECEIVER_GAIN);
     acc_detector_presence_configuration_hw_accelerated_average_samples_set(presence_configuration, DEFAULT_HWAAS);
 }
 
-void print_result(acc_detector_presence_result_t result)
-{
-    if (result.presence_detected)
-    {
-        printf("Motion\n");
+void print_result(acc_detector_presence_result_t result) {
+    // Get current time including microseconds
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    long long microseconds = ((long long)tv.tv_sec) * 1000000LL + (long long)tv.tv_usec;
+    //distance greater than 0; maybe change to or presence score>1100?
+    if (result.presence_distance > 0) {
+        trigger_camera();
     }
-    else
-    {
+
+    // Open the file for appending
+    FILE *csv_file = fopen("output.csv", "a");
+    if (csv_file == NULL) {
+        perror("Error opening file");
+        return;
+    }
+
+    // Print headers if the file is empty
+    long file_size;
+    fseek(csv_file, 0, SEEK_END);
+    file_size = ftell(csv_file);
+    if (file_size == 0) {
+        fprintf(csv_file, "Presence Score,Presence Distance,Time (Microseconds)\n");
+    }
+
+    // Write the presence score, presence distance, and current time to the CSV file in three columns
+    fprintf(csv_file, "%d,%d,%lld\n", (int)(result.presence_score * 1000.0f), (int)(result.presence_distance * 1000.0f), microseconds);
+
+    // Close the file
+    fclose(csv_file);
+
+    // Print to console for demonstration
+    if (result.presence_detected) {
+        printf("Motion\n");
+    } else {
         printf("No motion\n");
     }
 
-    printf("Presence score: %d, Distance: %d\n", (int)(result.presence_score * 1000.0f), (int)(result.presence_distance * 1000.0f));
+    printf("Presence score: %d, Distance: %d, Time (Microseconds): %lld\n", (int)(result.presence_score * 1000.0f), (int)(result.presence_distance * 1000.0f), microseconds);
+}
+
+void trigger_camera() {
+    int sockfd;
+    struct sockaddr_in servaddr;
+
+    // Create socket
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd == -1) {
+        perror("Socket creation failed");
+        return;
+    }
+
+    // Configure server address
+    memset(&servaddr, 0, sizeof(servaddr));
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // Assuming the server is running on localhost
+    servaddr.sin_port = htons(22); // Adjust the port number as needed
+
+    // Connect to server
+    if (connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) != 0) {
+        perror("Socket connection failed");
+        close(sockfd);
+        return;
+    }
+
+    // Connection successful, send trigger message to server
+    const char *trigger_msg = "trigger_camera";
+    if (send(sockfd, trigger_msg, strlen(trigger_msg), 0) == -1) {
+        perror("Error sending trigger message");
+    }
+
+    // Close socket
+    close(sockfd);
 }
