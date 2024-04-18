@@ -1,4 +1,4 @@
-// Copyright (c) Acconeer AB, 2019-2023
+// Copyright (c) Acconeer AB, 2019-2024
 // All rights reserved
 
 #ifndef ACC_INTEGRATION_H_
