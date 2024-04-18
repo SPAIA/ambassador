@@ -34,7 +34,7 @@
 #define DEFAULT_UPDATE_RATE (10)
 #define DEFAULT_POWER_SAVE_MODE ACC_POWER_SAVE_MODE_SLEEP
 #define DEFAULT_DETECTION_THRESHOLD (2.0f)
-#define DEFAULT_NBR_REMOVED_PC (0)
+#define DEFAULT_NBR_REMOVED_PC (1)
 #define DEFAULT_PROFILE (1)
 #define DEFAULT_HWAAS (15) // Hardware accelerated average samples bigger numbers reduce SNR default is 10
 
