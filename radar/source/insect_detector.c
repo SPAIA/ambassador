@@ -46,7 +46,7 @@
 #define DEFAULT_NBR_REMOVED_PC (1)
 #define DEFAULT_PROFILE (1)
 #define DEFAULT_RECEIVER_GAIN (0.5) //default 0.7
-#define DEFAULT_HWAAS (15) // Hardware accelerated average samples bigger numbers reduce SNR default is 10
+#define DEFAULT_HWAAS (5) // Hardware accelerated average samples bigger numbers reduce SNR default is 10
 
 #define PORT 9090
 
