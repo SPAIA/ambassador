@@ -7,7 +7,7 @@ import os
 import csv
 import qwiic_bme280
 import sys
-
+import socket
 
 # Load environment variables from .env file
 load_dotenv()
@@ -136,10 +136,35 @@ def captureData():
         print(f"Error: {e.strerror} - {e.filename}")
 
 
-try:
-    while True:
-        captureData()
-        time.sleep(10)  # Wait for 10 seconds before the next capture
-except KeyboardInterrupt:
-    print("Stopped by user")
+    # Wait for 10 seconds before the next capture
+
 # Blinky.fill(0,0,0)
+
+def main():
+    host = 'localhost'  # or use '0.0.0.0' to listen on all available interfaces
+    port = 9090          # Ensure this matches the client configuration
+    
+    # Create a socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+        server_socket.bind((host, port))
+        server_socket.listen()
+        
+        print(f"Listening on {host}:{port}...")
+        
+        # Accept connections
+        while True:
+            client_socket, addr = server_socket.accept()
+            with client_socket:
+                print(f"Connected by {addr}")
+                while True:
+                    data = client_socket.recv(1024)
+                    if not data:
+                        break
+                    message = data.decode('utf-8')
+                    captureData()
+                    print("capture complete")
+                    client_socket.sendall(b"Python script complete")
+            
+
+if __name__ == '__main__':
+    main()

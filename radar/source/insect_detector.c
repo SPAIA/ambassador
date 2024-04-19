@@ -48,14 +48,58 @@
 #define DEFAULT_RECEIVER_GAIN (0.5) //default 0.7
 #define DEFAULT_HWAAS (15) // Hardware accelerated average samples bigger numbers reduce SNR default is 10
 
+#define PORT 9090
+
 static void update_configuration(acc_detector_presence_configuration_t presence_configuration);
 
 static void print_result(acc_detector_presence_result_t result);
 
-void trigger_camera();
+void trigger_camera(void);
 
 
 int main(int argc, char *argv[]);
+void delete_csv(void); // Declare delete_csv with no parameters
+bool do_loop(acc_detector_presence_handle_t handle); // Declare do_loop with its parameter
+
+
+void delete_csv(void) {
+    if (remove("output.csv") == 0) {
+        printf("File deleted successfully\n");
+    } else {
+        perror("Failed to delete the file");
+    }
+}
+
+bool do_loop(acc_detector_presence_handle_t handle){
+    bool success = true;
+    const int iterations = 100;
+    acc_detector_presence_result_t result;
+    int i;
+    do {
+        for (i = 0; i < iterations; i++)
+        {
+            success = acc_detector_presence_get_next(handle, &result);
+            if (!success)
+            {
+                printf("acc_detector_presence_get_next() failed\n");
+                break;
+            }
+
+            print_result(result);
+            
+            acc_integration_sleep_ms(1000 / DEFAULT_UPDATE_RATE);
+        }
+        if (i == iterations) {
+            // This block only executes if the loop completes all iterations without breaking
+            delete_csv();
+            printf("Restarting the process...\n");
+            do_loop(handle);
+            // Call main again to restart the process
+        }
+
+    }while (i == iterations);
+    return success;
+}
 
 int main(int argc, char *argv[])
 {
@@ -100,23 +144,9 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    bool success = true;
-    const int iterations = 10000;
-    acc_detector_presence_result_t result;
+    bool success = do_loop(handle);
 
-    for (int i = 0; i < iterations; i++)
-    {
-        success = acc_detector_presence_get_next(handle, &result);
-        if (!success)
-        {
-            printf("acc_detector_presence_get_next() failed\n");
-            break;
-        }
-
-        print_result(result);
-        
-        acc_integration_sleep_ms(1000 / DEFAULT_UPDATE_RATE);
-    }
+    
 
     bool deactivated = acc_detector_presence_deactivate(handle);
 
@@ -153,6 +183,7 @@ void print_result(acc_detector_presence_result_t result) {
     long long microseconds = ((long long)tv.tv_sec) * 1000000LL + (long long)tv.tv_usec;
     //distance greater than 0; maybe change to or presence score>1100?
     if (result.presence_distance > 0) {
+    // if (rand() % 10 < 3) { // uncoment to debug socket
         trigger_camera();
     }
 
@@ -187,10 +218,10 @@ void print_result(acc_detector_presence_result_t result) {
     printf("Presence score: %d, Distance: %d, Time (Microseconds): %lld\n", (int)(result.presence_score * 1000.0f), (int)(result.presence_distance * 1000.0f), microseconds);
 }
 
-void trigger_camera() {
-    int sockfd;
+void trigger_camera(void) {
+    int sockfd = 0, valread;
     struct sockaddr_in servaddr;
-
+    printf("sending trigger message");
     // Create socket
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == -1) {
@@ -202,7 +233,7 @@ void trigger_camera() {
     memset(&servaddr, 0, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
     servaddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // Assuming the server is running on localhost
-    servaddr.sin_port = htons(22); // Adjust the port number as needed
+    servaddr.sin_port = htons(PORT); 
 
     // Connect to server
     if (connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) != 0) {
@@ -210,13 +241,17 @@ void trigger_camera() {
         close(sockfd);
         return;
     }
-
+    char buffer[1024] = {0};
     // Connection successful, send trigger message to server
     const char *trigger_msg = "trigger_camera";
     if (send(sockfd, trigger_msg, strlen(trigger_msg), 0) == -1) {
         perror("Error sending trigger message");
     }
-
+    valread = read(sockfd, buffer, 1024);
+    if (valread == 0) {
+        printf("No data received from the server.\n");
+    }
+    printf("%s\n", buffer);
     // Close socket
     close(sockfd);
 }
