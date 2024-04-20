@@ -1,171 +1,147 @@
-import time
+import threading
+import socket
+import cv2
 from picamera2 import Picamera2
+import numpy as np
+import os
 import requests
 from datetime import datetime
-from dotenv import load_dotenv
-import os
 import csv
+from dotenv import load_dotenv
 import qwiic_bme280
 import sys
-import socket
+import time
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
 # Access your API token
 api_token = os.getenv('API_TOKEN')
 
-
-picam = Picamera2()
-config = picam.create_video_configuration(main={"size": (1280, 720)})  # Reduced frame rate
-picam.configure(config)
-
-picam.configure(config)
+# Initialize BME280 sensor
 mySensor = qwiic_bme280.QwiicBme280()
-if mySensor.connected == False:
-    print("The Qwiic BME280 device isn't connected to the system. Please check your connection",  file=sys.stderr)
+if not mySensor.connected:
+    print("The Qwiic BME280 device isn't connected to the system. Please check your connection", file=sys.stderr)
 else:
-    print("BME found")
     mySensor.begin()
+    mySensor.filter = 1
+    mySensor.standby_time = 0
+    mySensor.over_sample = 1
+    mySensor.pressure_oversample = 1
+    mySensor.humidity_oversample = 1
+    mySensor.mode = mySensor.MODE_NORMAL
 
-    mySensor.filter = 1  		# 0 to 4 is valid. Filter coefficient. See 3.4.4
-    mySensor.standby_time = 0	# 0 to 7 valid. Time between readings. See table 27.
+class CameraManager:
+    def __init__(self):
+        self.camera = Picamera2()
+        config = self.camera.create_video_configuration(main={"size": (1280, 720)})
+        self.camera.configure(config)
+        self.lock = threading.Lock()
+        self.camera.start()
 
-    mySensor.over_sample = 1			# 0 to 16 are valid. 0 disables temp sensing. See table 24.
-    mySensor.pressure_oversample = 1	# 0 to 16 are valid. 0 disables pressure sensing. See table 23.
-    mySensor.humidity_oversample = 1	# 0 to 16 are valid. 0 disables humidity sensing. See table 19.
-    mySensor.mode = mySensor.MODE_NORMAL # MODE_SLEEP, MODE_FORCED, MODE_NORMAL is valid. See 3.3
+    def capture_frame(self):
+        with self.lock:
+            return self.camera.capture_array()
 
-    print(mySensor.temperature_celsius)
+    def __del__(self):
+        self.camera.stop()
 
+camera_manager = CameraManager()
 
-def generate_or_append_csv( data):
-    """
-    Generates a CSV file or appends data if the file already exists.
-    
-    Parameters:
-    - filename: The path to the file where the CSV will be saved or appended.
-    - data: A list of dictionaries, where each dictionary represents a row of data.
-           Expected keys are 'time', 'temperature', 'humidity', and 'media'.
-    """
-    
-    # Check if the file exists
+def generate_or_append_csv(data):
     filename = "data.csv"
     file_exists = os.path.isfile(filename)
-    
-    # Open the file in append mode if it exists, otherwise write mode
     with open(filename, mode='a' if file_exists else 'w', newline='') as file:
         writer = csv.writer(file, delimiter=';')
-        
-        # Write the header if the file does not exist
         if not file_exists:
             writer.writerow(['time', 'temperature', 'humidity', 'media'])
-        
-        # Iterate over the data and write each row
         for row in data:
             writer.writerow([row['time'], row['temperature'], row['humidity'], row['media']])
-            
     print(f"Data {'appended to' if file_exists else 'written to'} '{filename}' successfully.")
 
-
-
-def upload_jpg_file(filename):
-    url = "https://api.spaia.co.za/media"
-    headers = {
-        "Authorization": f"Bearer {api_token}"
-    }
-
-    with open(filename, "rb") as file:
-        files = {"file": (filename, file, "image/jpeg")}
-        response = requests.post(url, files=files, headers=headers)
-
-        if response.status_code == 200:
-            print("File uploaded successfully.")
-        else:
-            print("Failed to upload the file. Error:", response.text)
-def upload_csv_file():
-    url = "https://api.spaia.co.za/field/events"
-    headers = {
-        "Authorization": f"Bearer {api_token}"
-    }
-    file_path = 'data.csv'
+def upload_file(url, headers, file_path, key):
     try:
         with open(file_path, "rb") as file:
-            files = {"events": (file_path, file)}
+            files = {key: (file_path, file)}
             response = requests.post(url, files=files, headers=headers)
-
-            if response.status_code in [200, 201]:  # Assuming 201 could also be a success
-                print("CSV File uploaded successfully.")
+            if response.status_code in [200, 201]:
+                print(f"{file_path} uploaded successfully.")
             else:
-                print(f"Failed to upload the CSV file. Status code: {response.status_code}, Error:", response.text)
+                print(f"Failed to upload {file_path}. Status code: {response.status_code}, Error:", response.text)
     except Exception as e:
         print(f"An error occurred: {e}")
 
-def captureData():
-     # MODE_SLEEP, MODE_FORCED, MODE_NORMAL is valid. See 3.3
+def capture_data():
     now = datetime.now()
     file_name = now.strftime("%Y-%m-%d_%H-%M-%S")
     img_name = f"images/{file_name}.jpg"
-    if(mySensor.connected):
-        mySensor.mode = mySensor.MODE_NORMAL
-        data = [
-        {"time": datetime.now().timestamp(), "temperature": mySensor.temperature_celsius, "humidity": mySensor.humidity, "media": f"{file_name}.jpg"}
-        ]
-        mySensor.mode = mySensor.MODE_SLEEP # MODE_SLEEP, MODE_FORCED, MODE_NORMAL is valid. See 3.3
-    else:
-        data = [
-        {"time": datetime.now().timestamp(), "temperature": 0, "humidity":0, "media": f"{file_name}.jpg"}
-        ]
-   
-    
+    data = [{"time": now.timestamp(), "temperature": mySensor.temperature_celsius if mySensor.connected else 0, "humidity": mySensor.humidity if mySensor.connected else 0, "media": file_name }]
     generate_or_append_csv(data)
-    picam.start()
-    # time.sleep(2)  # Let camera warm up
-
-    picam.capture_file(img_name)  # Fixed missing variable usage
-    upload_csv_file();
-    upload_jpg_file(img_name)
-
-    picam.stop()  # Use stop instead of close to keep the session for the next capture
+    frame = camera_manager.capture_frame()
+    cv2.imwrite(img_name, frame)  # Assuming the frame is directly savable
+    upload_file("https://api.spaia.co.za/field/events", {"Authorization": f"Bearer {api_token}"}, 'data.csv', "events")
+    upload_file("https://api.spaia.co.za/media", {"Authorization": f"Bearer {api_token}"}, img_name, "file")
     try:
         os.remove(img_name)
-        print(f"Successfully deleted {img_name}")
         os.remove('data.csv')
-        print("deleted data.csv")
     except OSError as e:
-        print(f"Error: {e.strerror} - {e.filename}")
+        print(f"Error removing files: {e.strerror} - {e.filename}")
 
+def motion_detection():
+    first_frame = None
+    try:
+        while True:
+            frame = camera_manager.capture_frame()
+            if frame is None:
+                print("No frame captured.")
+                continue
 
-    # Wait for 10 seconds before the next capture
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.GaussianBlur(gray, (21, 21), 0)
 
-# Blinky.fill(0,0,0)
+            if first_frame is None:
+                first_frame = gray
+                print("Set first frame.")
+                continue
 
-def main():
-    host = 'localhost'  # or use '0.0.0.0' to listen on all available interfaces
-    port = 9090          # Ensure this matches the client configuration
-    
-    # Create a socket
+            frame_delta = cv2.absdiff(first_frame, gray)
+            thresh = cv2.threshold(frame_delta, 25, 255, cv2.THRESH_BINARY)[1]
+            thresh = cv2.dilate(thresh, None, iterations=2)
+            contours, _ = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            motion_detected = False
+            for contour in contours:
+                if cv2.contourArea(contour) < 200:
+                    continue
+                print("Motion detected!")
+                capture_data()  # This will capture and upload data
+                motion_detected = True
+                break  # Break after the first detection to avoid multiple captures
+
+            if motion_detected:
+                print("Pausing motion detection for 30 seconds...")
+                time.sleep(30)  # Pause for 30 seconds after capturing data
+    except Exception as e:
+        print(f"Error in motion_detection: {e}")
+
+def socket_listener():
+    host = 'localhost'
+    port = 9090
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
         server_socket.bind((host, port))
         server_socket.listen()
-        
-        print(f"Listening on {host}:{port}...")
-        
-        # Accept connections
         while True:
             client_socket, addr = server_socket.accept()
             with client_socket:
-                print(f"Connected by {addr}")
                 while True:
                     data = client_socket.recv(1024)
                     if not data:
                         break
-                    message = data.decode('utf-8')
-                    captureData()
-                    print("capture complete")
-                    client_socket.sendall(b"Python script complete")
-            
+                    capture_data()
+
+def main():
+    threading.Thread(target=motion_detection).start()
+    threading.Thread(target=socket_listener).start()
 
 if __name__ == '__main__':
-    captureData()
     main()

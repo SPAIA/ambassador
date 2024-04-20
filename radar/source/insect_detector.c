@@ -38,8 +38,8 @@
  *   - Deactivate Radar System Software (RSS)
  */
 
-#define DEFAULT_START_M (0.2f)
-#define DEFAULT_LENGTH_M (1.4f)
+#define DEFAULT_START_M (0.1f)
+#define DEFAULT_LENGTH_M (0.7f)
 #define DEFAULT_UPDATE_RATE (10)
 #define DEFAULT_POWER_SAVE_MODE ACC_POWER_SAVE_MODE_SLEEP
 #define DEFAULT_DETECTION_THRESHOLD (2.0f)
