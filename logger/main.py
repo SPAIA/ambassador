@@ -45,8 +45,9 @@ class CameraManager:
         self.low_res_config = self.camera.create_video_configuration(
             main={"size": (640, 480)}
         )
+        # , "format": "XRGB8888" is required for the PI HQ cam to get accurate colors
         self.high_res_config = self.camera.create_video_configuration(
-            main={"size": (2560, 1440)}
+            main={"size": (2560, 1440), "format": "XRGB8888"}
         )
         print("cam started")
 
@@ -197,8 +198,8 @@ def motion_detection():
                     break  # Break after the first detection to avoid multiple captures
 
                 if motion_detected:
-                    print("Pausing motion detection for 30 seconds...")
-                    time.sleep(30)  # Pause for 30 seconds after capturing data
+                    print("Pausing motion detection for 10 seconds...")
+                    time.sleep(10)  # Pause for 30 seconds after capturing data
                     first_frame = None
             except Exception as e:
                 print(f"Error during motion detection: {e}")
@@ -223,6 +224,7 @@ def socket_listener():
                     data = client_socket.recv(1024)
                     if not data:
                         break
+                    print("radar data")
                     capture_data()
 
 
@@ -230,8 +232,8 @@ def main():
     # Start threads
 
     motion_thread = threading.Thread(target=motion_detection)
-    # capture_thread = threading.Thread(target=capture_data)
-    # socket_thread = threading.Thread(target=socket_listener)
+    capture_thread = threading.Thread(target=capture_data)
+    socket_thread = threading.Thread(target=socket_listener)
 
     motion_thread.start()
     # capture_thread.start()
