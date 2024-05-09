@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 import qwiic_bme280
 import sys
 import time
+import json
 
 # Global event to signal threads to stop
 stop_event = threading.Event()
@@ -20,6 +21,11 @@ load_dotenv()
 
 # Access your API token
 api_token = os.getenv("API_TOKEN")
+
+#an area in which to ignore activity
+ignore_zone = None
+
+
 
 # Initialize BME280 sensor
 mySensor = qwiic_bme280.QwiicBme280()
@@ -37,7 +43,12 @@ else:
     mySensor.humidity_oversample = 1
     mySensor.mode = mySensor.MODE_NORMAL
 
-
+def get_ignore_zone():
+    ignore_zone = os.getenv("IGNORE_ZONE")
+    if ignore_zone:
+        x, y, width, height = map(int, ignore_zone.split(','))
+        return x, y, width, height
+    return None
 class CameraManager:
     def __init__(self):
         self.camera = Picamera2()
@@ -52,7 +63,6 @@ class CameraManager:
         print("cam started")
 
     def configure(self, config):
-        print("conf")
         with self.lock:
             self.camera.stop()
             self.camera.configure(config)
@@ -82,6 +92,69 @@ class CameraManager:
 
 camera_manager = CameraManager()
 
+def merge_contours_and_get_bboxes(contours):
+    # Helper function to calculate bounding box from a contour
+    def get_bounding_box(contour):
+        print("Received contour:", contour)
+    
+        # Convert the points in the contour to lists of x and y coordinates
+        coords = zip(*[pt[0] for pt in contour]) if contour else ([], [])
+        # print(coords)
+        try:
+            x_coords, y_coords =coords
+            print
+        except:
+            return [0, 0, 0, 0] 
+        # Since we're unpacking directly, no need to check len(), it'll raise an error if not correct
+        print("fush")
+        if x_coords and y_coords:  # Check if there are any coordinates to process
+            print("rect")
+            return min(x_coords), min(y_coords), max(x_coords), max(y_coords)
+        else:
+            return [0, 0, 0, 0] 
+    
+    # Helper function to check if two bounding boxes overlap
+    def boxes_intersect(box1, box2):
+        return (box1[0] <= box2[2] and box1[2] >= box2[0] and
+                box1[1] <= box2[3] and box1[3] >= box2[1])
+    
+    merged_bboxes = []
+    used = set()
+    print("location 1")
+    print("location 2",contours)
+    for i, cont1 in enumerate(contours):
+        print("Type of cont1 before calling get_bounding_box:", type(cont1))
+        print("cont1: ", cont1)
+    
+        if i in used:
+            continue
+        print("cont1: ", cont1)
+        bound1 = get_bounding_box(cont1)
+        print("bound 1", bound1)
+        for j, cont2 in enumerate(contours):
+            if i != j and j not in used:
+                bound2 = get_bounding_box(cont2)
+                if boxes_intersect(bound1, bound2):
+                    # Expand the bounding box to include both contours
+                    merged_x1 = min(bound1[0], bound2[0])
+                    merged_y1 = min(bound1[1], bound2[1])
+                    merged_x2 = max(bound1[2], bound2[2])
+                    merged_y2 = max(bound1[3], bound2[3])
+                    bound1 = (merged_x1, merged_y1, merged_x2, merged_y2)
+                    used.add(j)
+        # Store the merged bounding box
+        bbox  = bound1
+        if len(bbox) ==4:
+            x, y, x2, y2 = bound1
+            width = x2 - x
+            height = y2 - y
+            merged_bboxes.append([x, y, width, height])
+        else:
+            print("unable to get bbox", bbox)
+        used.add(i)
+    
+    return merged_bboxes
+
 
 def generate_or_append_csv(data):
     filename = "data.csv"
@@ -89,10 +162,10 @@ def generate_or_append_csv(data):
     with open(filename, mode="a" if file_exists else "w", newline="") as file:
         writer = csv.writer(file, delimiter=";")
         if not file_exists:
-            writer.writerow(["time", "temperature", "humidity", "media"])
+            writer.writerow(["time", "temperature", "humidity", "media", "contour"])
         for row in data:
             writer.writerow(
-                [row["time"], row["temperature"], row["humidity"], row["media"]]
+                [row["time"], row["temperature"], row["humidity"], row["media"], row["contour"]]
             )
     print(
         f"Data {'appended to' if file_exists else 'written to'} '{filename}' successfully."
@@ -115,8 +188,9 @@ def upload_file(url, headers, file_path, key):
         print(f"An error occurred: {e}")
 
 
-def capture_data():
+def capture_data(contour=None):
     print("capture")
+    contour_data = json.dumps(contour.tolist()) if contour is not None else "None"
     if not stop_event.is_set():
         now = datetime.now()
         file_name = now.strftime("%Y-%m-%d_%H-%M-%S")
@@ -128,6 +202,7 @@ def capture_data():
 
         finally:
             camera_manager.configure(camera_manager.low_res_config)
+        merged_rects = merge_contours_and_get_bboxes(contour)
         data = [
             {
                 "time": now.timestamp(),
@@ -136,6 +211,7 @@ def capture_data():
                 ),
                 "humidity": mySensor.humidity if mySensor.connected else 0,
                 "media": file_name,
+                "contour": contour_data
             }
         ]
         print(data)
@@ -163,6 +239,7 @@ def capture_data():
 
 def motion_detection():
     camera_manager.configure(camera_manager.low_res_config)
+    ignore_zone = get_ignore_zone()
     try:
         # camera_manager.configure(camera_manager.low_res_config)
         first_frame = None
@@ -193,13 +270,13 @@ def motion_detection():
                     if 10 < area < 1000:
                         continue
                     print("Motion detected!")
-                    capture_data()  # This will capture and upload data
+                    capture_data(contour)  # This will capture and upload data
                     motion_detected = True
                     break  # Break after the first detection to avoid multiple captures
 
                 if motion_detected:
-                    print("Pausing motion detection for 10 seconds...")
-                    time.sleep(10)  # Pause for 30 seconds after capturing data
+                    # print("Pausing motion detection for 10 seconds...")
+                    # time.sleep(10)  # Pause for 30 seconds after capturing data
                     first_frame = None
             except Exception as e:
                 print(f"Error during motion detection: {e}")
