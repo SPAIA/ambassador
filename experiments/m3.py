@@ -1,55 +1,68 @@
 from picamera2 import Picamera2
-from libcamera import controls
+import threading
+import time
 import cv2
-picam2 = Picamera2()
-picam2.set_controls({"AfMode": controls.AfModeEnum.Continuous, "AfSpeed": controls.AfSpeedEnum.Fast})
-camera_config = picam2.create_still_configuration(main={"size": (3280,2464), "format": "XRGB8888"})
-picam2.configure(camera_config)
-picam2.start()
-print("go")
-picam2.set_controls({"AfMode":controls.AfModeEnum.Continuous, "AfRange":controls.AfRangeEnum.Macro})
-try:
-    frame = picam2.capture_array()
-except Exception as e:
-    print(
-        f"An unexpected error occurred while capturing the frame: {type(e).__name__}, {str(e)}"
-    )
+from libcamera import controls  # Ensure you import controls from libcamera
 
-cv2.imwrite("continuous.jpg", frame)
-picam2.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 8.0})
-try:
-    frame = picam2.capture_array()
-except Exception as e:
-    print(
-        f"An unexpected error occurred while capturing the frame: {type(e).__name__}, {str(e)}"
-    )
+class CameraManager:
+    def __init__(self):
+        self.camera = Picamera2()
+        self.lock = threading.Lock()
+        self.low_res_config = self.camera.create_video_configuration(
+            main={"size": (640, 480)}
+        )
+        self.high_res_config = self.camera.create_video_configuration(
+            main={"size": (2304, 1296), "format": "XRGB8888"}
+        )
+        print("cam started")
 
-cv2.imwrite("8.jpg", frame)
-picam2.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition":5})
-try:
-    frame = picam2.capture_array()
-except Exception as e:
-    print(
-        f"An unexpected error occurred while capturing the frame: {type(e).__name__}, {str(e)}"
-    )
+    def configure(self, config):
+        with self.lock:
+            self.camera.stop()
+            self.camera.configure(config)
+            self.camera.start()
 
-cv2.imwrite("5.jpg", frame)
-picam2.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 2.0})
-try:
-    frame = picam2.capture_array()
-except Exception as e:
-    print(
-        f"An unexpected error occurred while capturing the frame: {type(e).__name__}, {str(e)}"
-    )
+            # Auto exposure
+            self.camera.set_controls({"AeEnable": True})
+            self.camera.set_controls({"ExposureValue": 0.8})  # Adjust this value to ensure details in shadows
+            
+            # Increase sharpness
+            self.camera.set_controls({"Sharpness": 2.0})  # Adjust sharpness level as needed, range typically from -2.0 to 2.0
 
-cv2.imwrite("2.jpg", frame)
-picam2.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": 1})
-try:
-    frame = picam2.capture_array()
-except Exception as e:
-    print(
-        f"An unexpected error occurred while capturing the frame: {type(e).__name__}, {str(e)}"
-    )
+    def set_manual_focus(self, lens_position):
+        with self.lock:
+            self.camera.set_controls({
+                "AfMode": controls.AfModeEnum.Manual, 
+                "LensPosition": lens_position
+            })
 
-cv2.imwrite("1.jpg", frame)
-print("wrote")
+    def capture_frame(self, filename):
+        with self.lock:
+            try:
+                frame = self.camera.capture_array()
+                if frame is not None:
+                    cv2.imwrite(filename, frame)
+                return frame
+            except Exception as e:
+                print(f"An unexpected error occurred while capturing the frame: {type(e).__name__}, {str(e)}")
+                return None
+
+    def stop(self):
+        print("stop")
+        with self.lock:
+            self.camera.stop()
+
+if __name__ == "__main__":
+    camera_manager = CameraManager()
+    camera_manager.configure(camera_manager.high_res_config)  # Use high resolution for clarity
+
+    # Experiment with lens positions
+    for lens_position in range(0, 8, 1):  # Adjust the range and step as needed
+        print(f"Setting lens position to {lens_position/2}")
+        camera_manager.set_manual_focus(lens_position/2)
+        time.sleep(1)  # Allow time for the camera to adjust
+        frame = camera_manager.capture_frame(f"focus_{lens_position/2}.jpg")
+        if frame is None:
+            print(f"Lens position {lens_position/2} is not valid")
+
+    camera_manager.stop()

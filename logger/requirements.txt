@@ -1,5 +1,5 @@
-picamera2
-sparkfun-qwiic-bme280
-python-dotenv
-imutils
-opencv-python-headless
+opencv-python
+cv2
+supervision
+ultralytics
+source .venv/bin/activate
